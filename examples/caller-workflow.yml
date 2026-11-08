@@ -16,8 +16,17 @@ jobs:
   repoaccord:
     runs-on: ubuntu-latest
     steps:
-      # For real repositories, pin a release tag or full commit SHA.
-      - uses: sensiwolf/repoaccord@v0.1.0
+      # GitHub App identity variant (use instead of the personal-token step below):
+      # - id: app-token
+      #   uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+      #   with:
+      #     client-id: ${{ vars.REPOACCORD_CLIENT_ID }}
+      #     private-key: ${{ secrets.REPOACCORD_APP_PRIVATE_KEY }}
+      # - uses: sensiwolf/repoaccord@v0.2.0
+      #   with:
+      #     token: ${{ steps.app-token.outputs.token }}
+      #     dry-run: ${{ vars.REPOACCORD_DRY_RUN || 'true' }}
+      - uses: sensiwolf/repoaccord@v0.2.0
         with:
           token: ${{ secrets.REPOACCORD_TOKEN }}
           dry-run: ${{ vars.REPOACCORD_DRY_RUN || 'true' }}

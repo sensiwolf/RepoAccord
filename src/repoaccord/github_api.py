@@ -472,13 +472,18 @@ class GitHubClient:
             return True
         return False
 
-    def create_issue(self, title: str, body: str, labels: tuple[str, ...]) -> IssueRef:
+    def create_issue(
+        self,
+        title: str,
+        body: str,
+        labels: tuple[str, ...],
+        assignees: tuple[str, ...] = (),
+    ) -> IssueRef:
         """Create an issue without retrying its POST request."""
-        data = self._json(
-            "POST",
-            self._url("issues"),
-            {"title": title, "body": body, "labels": list(labels)},
-        )
+        payload: dict[str, Any] = {"title": title, "body": body, "labels": list(labels)}
+        if assignees:
+            payload["assignees"] = list(assignees)
+        data = self._json("POST", self._url("issues"), payload)
         if not isinstance(data, dict):
             raise GitHubError(200, "issue response is invalid", self._token)
         number, url = data.get("number"), data.get("html_url")
@@ -487,6 +492,30 @@ class GitHubClient:
         if _redact(url, self._token) != url:
             raise GitHubError(200, "issue URL contains a forbidden credential", self._token)
         return IssueRef(number=number, url=url)
+
+    def request_reviewers(self, pull_number: int, reviewers: tuple[str, ...]) -> None:
+        """Request reviewers for a pull request without retrying its POST request."""
+        self._json(
+            "POST",
+            self._url("pulls", str(pull_number), "requested_reviewers"),
+            {"reviewers": list(reviewers)},
+        )
+
+    def add_assignees(self, number: int, assignees: tuple[str, ...]) -> None:
+        """Add issue or pull request assignees without retrying its POST request."""
+        self._json(
+            "POST",
+            self._url("issues", str(number), "assignees"),
+            {"assignees": list(assignees)},
+        )
+
+    def add_labels(self, number: int, labels: tuple[str, ...]) -> None:
+        """Add issue or pull request labels without retrying its POST request."""
+        self._json(
+            "POST",
+            self._url("issues", str(number), "labels"),
+            {"labels": list(labels)},
+        )
 
     def create_pull_request(
         self,

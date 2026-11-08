@@ -1,5 +1,6 @@
 """Parse and validate RepoAccord configuration text."""
 
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -10,6 +11,7 @@ from yaml.nodes import MappingNode
 from repoaccord.errors import ConfigError
 
 MAX_CONFIG_LENGTH = 64 * 1024
+_LOGIN = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$")
 
 
 class _UniqueKeyLoader(yaml.SafeLoader):
@@ -62,13 +64,17 @@ class Issues:
 
     label: str | None = None
     template: str | None = None
+    assignees: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
 class PullRequest:
-    """Pull request body configuration."""
+    """Pull request body and optional metadata configuration."""
 
     placeholder: str = "#<issue number>"
+    reviewers: tuple[str, ...] = ()
+    assignees: tuple[str, ...] = ()
+    labels: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -131,6 +137,39 @@ def _strings(
     return tuple(value)
 
 
+def _logins(value: Any, path: str, maximum: int) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        raise ConfigError(f"{path} must be a list of GitHub logins")
+    if len(value) > maximum:
+        raise ConfigError(f"{path} must contain at most {maximum} entries")
+    result: list[str] = []
+    seen: set[str] = set()
+    for login in value:
+        if not isinstance(login, str) or not _LOGIN.fullmatch(login):
+            raise ConfigError(f"{path} entries must be valid GitHub logins")
+        folded = login.casefold()
+        if folded not in seen:
+            result.append(login)
+            seen.add(folded)
+    return tuple(result)
+
+
+def _labels(value: Any, path: str) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        raise ConfigError(f"{path} must be a list of strings")
+    if len(value) > 20:
+        raise ConfigError(f"{path} must contain at most 20 entries")
+    result: list[str] = []
+    seen: set[str] = set()
+    for label in value:
+        if not isinstance(label, str) or not label or len(label) > 50:
+            raise ConfigError(f"{path} entries must be non-empty strings of at most 50 characters")
+        if label not in seen:
+            result.append(label)
+            seen.add(label)
+    return tuple(result)
+
+
 def _optional_string(value: Any, path: str) -> str | None:
     if value is not None and not isinstance(value, str):
         raise ConfigError(f"{path} must be a string or null")
@@ -186,8 +225,9 @@ def load_config(text: str | None) -> Config:
     if any(any(character.isspace() for character in login) for login in allow):
         raise ConfigError("actors.allow entries must be logins without whitespace")
 
-    issue_data = _mapping(root.get("issues", {}), "issues", {"label", "template"})
+    issue_data = _mapping(root.get("issues", {}), "issues", {"label", "template", "assignees"})
     label = _optional_string(issue_data.get("label"), "issues.label")
+    issue_assignees = _logins(issue_data.get("assignees", []), "issues.assignees", 10)
     if label is not None and (len(label) > 50 or "\n" in label or "\r" in label):
         raise ConfigError("issues.label must be at most 50 characters with no newline")
     template = _optional_string(issue_data.get("template"), "issues.template")
@@ -196,10 +236,17 @@ def load_config(text: str | None) -> Config:
     ):
         raise ConfigError("issues.template must be a file name")
 
-    pr_data = _mapping(root.get("pull_request", {}), "pull_request", {"placeholder"})
+    pr_data = _mapping(
+        root.get("pull_request", {}),
+        "pull_request",
+        {"placeholder", "reviewers", "assignees", "labels"},
+    )
     placeholder = pr_data.get("placeholder", PullRequest().placeholder)
     if not isinstance(placeholder, str) or not 1 <= len(placeholder) <= 64:
         raise ConfigError("pull_request.placeholder must be a string of 1..64 characters")
+    reviewers = _logins(pr_data.get("reviewers", []), "pull_request.reviewers", 15)
+    pr_assignees = _logins(pr_data.get("assignees", []), "pull_request.assignees", 10)
+    pr_labels = _labels(pr_data.get("labels", []), "pull_request.labels")
 
     trailer_data = _mapping(root.get("trailers", {}), "trailers", {"forbid"})
     forbid = _strings(
@@ -221,8 +268,13 @@ def load_config(text: str | None) -> Config:
         version=version,
         branches=Branches(prefixes=prefixes),
         actors=Actors(allow=allow),
-        issues=Issues(label=label, template=template),
-        pull_request=PullRequest(placeholder=placeholder),
+        issues=Issues(label=label, template=template, assignees=issue_assignees),
+        pull_request=PullRequest(
+            placeholder=placeholder,
+            reviewers=reviewers,
+            assignees=pr_assignees,
+            labels=pr_labels,
+        ),
         trailers=Trailers(forbid=forbid),
         auto_merge=AutoMerge(enabled=enabled, method=method),
     )

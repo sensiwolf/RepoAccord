@@ -41,6 +41,64 @@ auto_merge:
         self.assertTrue(config.auto_merge.enabled)
         self.assertEqual(config.auto_merge.method, "squash")
 
+    def test_optional_metadata_defaults_and_valid_values(self) -> None:
+        config = load_config(None)
+        self.assertEqual(config.issues.assignees, ())
+        self.assertEqual(config.pull_request.reviewers, ())
+        self.assertEqual(config.pull_request.assignees, ())
+        self.assertEqual(config.pull_request.labels, ())
+        config = load_config(
+            "issues:\n  assignees: [Alice, bob, ALICE]\n"
+            "pull_request:\n  reviewers: [Reviewer-1, reviewer-1]\n"
+            "  assignees: [Owner]\n  labels: [triage, needs-review, triage]\n"
+        )
+        self.assertEqual(config.issues.assignees, ("Alice", "bob"))
+        self.assertEqual(config.pull_request.reviewers, ("Reviewer-1",))
+        self.assertEqual(config.pull_request.assignees, ("Owner",))
+        self.assertEqual(config.pull_request.labels, ("triage", "needs-review"))
+
+    def test_metadata_login_validation_and_limits(self) -> None:
+        for path, values, _limit in (
+            ("issues.assignees", ["alice@host"], 10),
+            ("pull_request.reviewers", ["has space"], 15),
+            ("pull_request.assignees", ["alice[bot]"], 10),
+            ("pull_request.reviewers", ["a" * 40], 15),
+            ("issues.assignees", [f"user{i}" for i in range(11)], 10),
+            ("pull_request.reviewers", [f"user{i}" for i in range(16)], 15),
+            ("pull_request.assignees", [f"user{i}" for i in range(11)], 10),
+        ):
+            section, key = path.split(".")
+            text = f"{section}:\n  {key}: {values!r}"
+            with (
+                self.subTest(path=path, values=values),
+                self.assertRaisesRegex(ConfigError, path.replace(".", r"\.")),
+            ):
+                load_config(text)
+
+    def test_metadata_lists_reject_wrong_types_and_labels(self) -> None:
+        for text, path in (
+            ("issues:\n  assignees: alice", "issues.assignees"),
+            ("pull_request:\n  reviewers: [alice, 2]", "pull_request.reviewers"),
+            ("pull_request:\n  assignees: {}", "pull_request.assignees"),
+            ("pull_request:\n  labels: not-a-list", "pull_request.labels"),
+            ('pull_request:\n  labels: [""]', "pull_request.labels"),
+            ("pull_request:\n  labels: [null]", "pull_request.labels"),
+            ("pull_request:\n  labels: [" + "x" * 51 + "]", "pull_request.labels"),
+            (
+                "pull_request:\n  labels: [" + ", ".join(f"label{i}" for i in range(21)) + "]",
+                "pull_request.labels",
+            ),
+        ):
+            with (
+                self.subTest(path=path, text=text),
+                self.assertRaisesRegex(ConfigError, path.replace(".", r"\.")),
+            ):
+                load_config(text)
+
+    def test_unknown_pull_request_metadata_keys_are_rejected(self) -> None:
+        with self.assertRaisesRegex(ConfigError, r"pull_request\.unknown"):
+            load_config("pull_request:\n  unknown: true")
+
     def test_unknown_keys_report_their_path(self) -> None:
         for text, path in (
             ("mystery: true", "mystery"),

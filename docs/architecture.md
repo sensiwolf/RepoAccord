@@ -3,14 +3,13 @@
 ## Purpose and form
 
 RepoAccord automates repetitive Git and GitHub housekeeping while following each repository's
-rules. It is planned as a GitHub composite action calling a small Python package. It will not be
-published to PyPI.
+rules. It is a GitHub composite action calling a small Python package. It is not published to PyPI.
 
 ## Implemented flow
 
 Push event -> authorize -> read configuration and templates from the default branch -> parse the
-tip commit message -> let policy decide a plan -> execute idempotently -> optionally enable
-auto-merge.
+tip commit message -> let policy decide a plan -> execute idempotently -> optionally request pull
+request metadata -> optionally enable auto-merge.
 
 ## Module map
 
@@ -25,12 +24,11 @@ Implemented offline modules:
 - `github_api.py`: call GitHub through an injectable transport.
 - `run.py`: map push events to facts, plans, output, and approved API operations.
 
-Planned, not implemented:
-
-- additional execution and recovery behavior beyond the current supported operations.
-
-Policy is pure logic; network access belongs only in `github_api.py`. The client and runner are
-covered using a fake transport and do not require live GitHub access in tests.
+The closed action set is `CreateIssue`, `CreatePullRequest`, `AddPullRequestMetadata`, and
+`EnableAutoMerge`. When planned, execution order is issue creation, pull request creation, optional
+pull request metadata, then optional auto-merge. Metadata is omitted when all metadata lists are
+empty. Policy is pure logic; network access belongs only in `github_api.py`. Client and runner
+behavior is tested offline with a fake transport.
 
 ## Phase 1 non-goals
 

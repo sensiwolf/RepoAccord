@@ -304,6 +304,77 @@ class TestGitHubClient(unittest.TestCase):
             json.loads(request[3] or b""), {"title": "title", "body": "body", "labels": ["bug"]}
         )
 
+    def test_create_issue_assignees_are_only_sent_when_non_empty(self) -> None:
+        transport = FakeTransport(
+            json_response(201, {"number": 12, "html_url": "https://github.test/i/12"}),
+            json_response(201, {"number": 13, "html_url": "https://github.test/i/13"}),
+        )
+        api = client(transport)
+        api.create_issue("title", "body", (), ("alice", "bob"))
+        api.create_issue("title", "body", ())
+        self.assertEqual(
+            json.loads(transport.requests[0][3] or b""),
+            {"title": "title", "body": "body", "labels": [], "assignees": ["alice", "bob"]},
+        )
+        self.assertEqual(
+            json.loads(transport.requests[1][3] or b""),
+            {"title": "title", "body": "body", "labels": []},
+        )
+
+    def test_pull_request_metadata_paths_and_payloads(self) -> None:
+        transport = FakeTransport(
+            json_response(201, {"requested_reviewers": []}),
+            json_response(201, {"assignees": []}),
+            json_response(200, [{"name": "triage"}]),
+        )
+        api = client(transport)
+        api.request_reviewers(21, ("reviewer",))
+        api.add_assignees(21, ("pr-owner",))
+        api.add_labels(21, ("triage",))
+        self.assertEqual(
+            [(request[0], request[1]) for request in transport.requests],
+            [
+                ("POST", "https://api.github.com/repos/owner/repo/pulls/21/requested_reviewers"),
+                ("POST", "https://api.github.com/repos/owner/repo/issues/21/assignees"),
+                ("POST", "https://api.github.com/repos/owner/repo/issues/21/labels"),
+            ],
+        )
+        self.assertEqual(
+            [json.loads(request[3] or b"") for request in transport.requests],
+            [{"reviewers": ["reviewer"]}, {"assignees": ["pr-owner"]}, {"labels": ["triage"]}],
+        )
+
+    def test_metadata_posts_are_not_retried_on_errors_or_rate_limits(self) -> None:
+        calls = (
+            lambda api: api.request_reviewers(21, ("reviewer",)),
+            lambda api: api.add_assignees(21, ("owner",)),
+            lambda api: api.add_labels(21, ("triage",)),
+        )
+        for call in calls:
+            for response in (
+                json_response(500, {"message": "server error"}),
+                json_response(429, {"message": "rate limited"}, {"Retry-After": "5"}),
+            ):
+                with self.subTest(response=response.status):
+                    transport = FakeTransport(response, json_response(200, {}))
+                    with self.assertRaises(GitHubError):
+                        call(client(transport))
+                    self.assertEqual(len(transport.requests), 1)
+
+    def test_metadata_api_errors_redact_token(self) -> None:
+        calls = (
+            lambda api: api.request_reviewers(21, ("reviewer",)),
+            lambda api: api.add_assignees(21, ("owner",)),
+            lambda api: api.add_labels(21, ("triage",)),
+        )
+        for call in calls:
+            with self.subTest(call=call):
+                transport = FakeTransport(json_response(422, {"message": f"bad {FAKE_CREDENTIAL}"}))
+                with self.assertRaises(GitHubError) as caught:
+                    call(client(transport))
+                self.assertNotIn(FAKE_CREDENTIAL, str(caught.exception))
+                self.assertNotIn(FAKE_CREDENTIAL, repr(caught.exception))
+
     def test_create_pull_request_payload_and_reference(self) -> None:
         transport = FakeTransport(
             json_response(
