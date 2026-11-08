@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from repoaccord.policy import (
+    AddPullRequestMetadata,
     CreateIssue,
     CreatePullRequest,
     EnableAutoMerge,
@@ -293,8 +294,18 @@ class TestPolicy(unittest.TestCase):
 
     def test_actions_are_exactly_the_supported_action_types(self) -> None:
         self.assertEqual(
-            {CreateIssue.__name__, CreatePullRequest.__name__, EnableAutoMerge.__name__},
-            {"CreateIssue", "CreatePullRequest", "EnableAutoMerge"},
+            {
+                CreateIssue.__name__,
+                CreatePullRequest.__name__,
+                AddPullRequestMetadata.__name__,
+                EnableAutoMerge.__name__,
+            },
+            {
+                "CreateIssue",
+                "CreatePullRequest",
+                "AddPullRequestMetadata",
+                "EnableAutoMerge",
+            },
         )
         issue_plan = decide(
             event(message=issue_message()),
@@ -305,6 +316,62 @@ class TestPolicy(unittest.TestCase):
             tuple(type(action) for action in issue_plan.actions),
             (CreateIssue, CreatePullRequest),
         )
+
+    def test_default_plan_is_unchanged_and_metadata_follows_pull_request(self) -> None:
+        baseline = decide(
+            event(message=issue_message()),
+            facts(paths=(PR_PATH, ISSUE_PATH), issue_templates={ISSUE_PATH: ISSUE_TEMPLATE}),
+            None,
+        )
+        self.assertEqual(
+            baseline.actions,
+            (
+                CreateIssue("Bug title", "## Details\nIssue text", ()),
+                CreatePullRequest(
+                    "Implement example",
+                    PR_BODY + "\n#<issue number>",
+                    "main",
+                    "feat/example",
+                    "#<issue number>",
+                ),
+            ),
+        )
+        configured = decide(
+            event(message=issue_message()),
+            facts(
+                paths=(PR_PATH, ISSUE_PATH),
+                issue_templates={ISSUE_PATH: ISSUE_TEMPLATE},
+                required_checks_proven=True,
+            ),
+            "issues:\n  assignees: [issue-owner]\n"
+            "pull_request:\n  reviewers: [reviewer]\n  assignees: [pr-owner]\n"
+            "  labels: [triage]\nauto_merge:\n  enabled: true",
+        )
+        self.assertEqual(configured.decision, "act")
+        self.assertEqual(
+            tuple(type(action) for action in configured.actions),
+            (CreateIssue, CreatePullRequest, AddPullRequestMetadata, EnableAutoMerge),
+        )
+        self.assertEqual(configured.actions[0].assignees, ("issue-owner",))
+        metadata = configured.actions[2]
+        self.assertIsInstance(metadata, AddPullRequestMetadata)
+        if isinstance(metadata, AddPullRequestMetadata):
+            self.assertEqual(metadata.reviewers, ("reviewer",))
+            self.assertEqual(metadata.assignees, ("pr-owner",))
+            self.assertEqual(metadata.labels, ("triage",))
+
+    def test_metadata_is_planned_for_labels_only_and_omitted_when_empty(self) -> None:
+        labels_only = decide(event(), facts(), "pull_request:\n  labels: [triage]")
+        self.assertEqual(
+            tuple(type(action) for action in labels_only.actions),
+            (CreatePullRequest, AddPullRequestMetadata),
+        )
+        metadata = labels_only.actions[1]
+        self.assertEqual(metadata, AddPullRequestMetadata((), (), ("triage",)))
+        default = decide(
+            event(), facts(), "pull_request:\n  reviewers: []\n  assignees: []\n  labels: []"
+        )
+        self.assertEqual(tuple(type(action) for action in default.actions), (CreatePullRequest,))
 
     def test_auto_merge_check_states_and_method(self) -> None:
         for proof, expected, note in (

@@ -51,6 +51,7 @@ class CreateIssue:
     title: str
     body: str
     labels: tuple[str, ...]
+    assignees: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -65,13 +66,22 @@ class CreatePullRequest:
 
 
 @dataclass(frozen=True)
+class AddPullRequestMetadata:
+    """Request optional reviewers, assignees, and labels for a pull request."""
+
+    reviewers: tuple[str, ...]
+    assignees: tuple[str, ...]
+    labels: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class EnableAutoMerge:
     """Enable auto-merge using the configured method."""
 
     method: str
 
 
-Action: TypeAlias = CreateIssue | CreatePullRequest | EnableAutoMerge
+Action: TypeAlias = CreateIssue | CreatePullRequest | AddPullRequestMetadata | EnableAutoMerge
 Decision: TypeAlias = Literal["skip", "refuse", "act"]
 
 
@@ -222,6 +232,7 @@ def decide(event: PushEvent, facts: RepoFacts, config_text: str | None) -> Plan:
             title=message.issue.title,
             body=message.issue.body,
             labels=issue_labels,
+            assignees=config.issues.assignees,
         )
     elif config.pull_request.placeholder in message.pr_body:
         return _refuse("pull request body must not contain the issue placeholder without an issue")
@@ -238,6 +249,14 @@ def decide(event: PushEvent, facts: RepoFacts, config_text: str | None) -> Plan:
             placeholder=config.pull_request.placeholder,
         )
     )
+    if config.pull_request.reviewers or config.pull_request.assignees or config.pull_request.labels:
+        actions.append(
+            AddPullRequestMetadata(
+                reviewers=config.pull_request.reviewers,
+                assignees=config.pull_request.assignees,
+                labels=config.pull_request.labels,
+            )
+        )
     if config.auto_merge.enabled:
         if facts.required_checks_proven is True:
             actions.append(EnableAutoMerge(method=config.auto_merge.method))

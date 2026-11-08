@@ -21,6 +21,7 @@ from repoaccord.github_api import (
 )
 from repoaccord.policy import (
     Action,
+    AddPullRequestMetadata,
     CreateIssue,
     CreatePullRequest,
     EnableAutoMerge,
@@ -266,6 +267,7 @@ def run(
                         action.title,
                         _append_marker(action.body, marker),
                         action.labels,
+                        action.assignees,
                     )
             elif isinstance(action, CreatePullRequest):
                 number = issue_ref.number if issue_ref is not None else None
@@ -276,6 +278,29 @@ def run(
                     action.head,
                     action.base,
                 )
+            elif isinstance(action, AddPullRequestMetadata):
+                if pull_request_ref is None:
+                    return _failure(
+                        "pull request metadata plan has no created pull request",
+                        issue_ref,
+                        None,
+                        tuple(notes),
+                    )
+                if action.reviewers:
+                    try:
+                        client.request_reviewers(pull_request_ref.number, action.reviewers)
+                    except GitHubError as exc:
+                        notes.append(f"could not request reviewers: {exc.message}")
+                if action.assignees:
+                    try:
+                        client.add_assignees(pull_request_ref.number, action.assignees)
+                    except GitHubError as exc:
+                        notes.append(f"could not add pull request assignees: {exc.message}")
+                if action.labels:
+                    try:
+                        client.add_labels(pull_request_ref.number, action.labels)
+                    except GitHubError as exc:
+                        notes.append(f"could not add pull request labels: {exc.message}")
             elif isinstance(action, EnableAutoMerge):
                 if pull_request_ref is None:
                     return _failure(

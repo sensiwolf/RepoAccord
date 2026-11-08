@@ -37,6 +37,7 @@ class RoutingTransport:
         auto_merge: bool = False,
         fail_pr: bool = False,
         fail_graphql: bool = False,
+        fail_reviewers: bool = False,
         default_branch: str = "main",
         config_text: str | None = None,
         open_issues: list[dict[str, object]] | None = None,
@@ -45,6 +46,7 @@ class RoutingTransport:
         self.auto_merge = auto_merge
         self.fail_pr = fail_pr
         self.fail_graphql = fail_graphql
+        self.fail_reviewers = fail_reviewers
         self.default_branch = default_branch
         self.config_text = config_text
         self.open_issues = open_issues or []
@@ -63,6 +65,14 @@ class RoutingTransport:
         path = parsed.path
         if method == "POST":
             payload = json.loads(body or b"{}")
+            if path.endswith("/requested_reviewers"):
+                return (
+                    _json(422, {"message": "reviewer request unavailable"})
+                    if self.fail_reviewers
+                    else _json(201, {})
+                )
+            if path.endswith("/assignees") or path.endswith("/labels"):
+                return _json(201, {"ok": True})
             if path.endswith("/issues"):
                 return Response(
                     201,
@@ -414,6 +424,104 @@ class TestRun(unittest.TestCase):
         self.assertEqual(graph_payload["variables"], {"id": "PR_node", "method": "SQUASH"})
         self.assertEqual(result.issue.number if result.issue else None, 17)
         self.assertEqual(result.pull_request.number if result.pull_request else None, 21)
+
+    def test_metadata_calls_follow_pull_request_and_precede_auto_merge(self) -> None:
+        message = (
+            "Add report\n\n=== ISSUE ===\nBug title\n## Details\nIssue details."
+            "\n=== PR ===\n## Summary\nChange.\n## Testing\nDone\n#<issue number>"
+        )
+        config = (
+            "issues:\n  assignees: [issue-owner]\n"
+            "pull_request:\n  reviewers: [reviewer]\n  assignees: [pr-owner]\n"
+            "  labels: [triage]\nauto_merge:\n  enabled: true"
+        )
+        transport = RoutingTransport(issue=True, auto_merge=True, config_text=config)
+        with redirect_stdout(StringIO()):
+            result = run(
+                push_event(commit_message=message),
+                GitHubClient(transport, FAKE_CREDENTIAL, "owner/repo", sleep=lambda _: None),
+                ".github/repoaccord.yml",
+                False,
+            )
+        posts = [request for request in transport.requests if request[0] == "POST"]
+        self.assertEqual(
+            [urlsplit(request[1]).path.rsplit("/", 1)[-1] for request in posts],
+            ["issues", "pulls", "requested_reviewers", "assignees", "labels", "graphql"],
+        )
+        self.assertEqual(json.loads(posts[0][3] or b"")["assignees"], ["issue-owner"])
+        self.assertEqual(urlsplit(posts[2][1]).path.split("/")[-2], "21")
+        self.assertEqual(urlsplit(posts[3][1]).path.split("/")[-2], "21")
+        self.assertEqual(urlsplit(posts[4][1]).path.split("/")[-2], "21")
+        self.assertEqual(result.decision, "act")
+        self.assertEqual(
+            result.actions,
+            ("CreateIssue", "CreatePullRequest", "AddPullRequestMetadata", "EnableAutoMerge"),
+        )
+
+    def test_reviewer_failure_is_a_note_and_other_metadata_and_auto_merge_continue(self) -> None:
+        config = (
+            "pull_request:\n  reviewers: [reviewer]\n  assignees: [owner]\n"
+            "  labels: [triage]\nauto_merge:\n  enabled: true"
+        )
+        transport = RoutingTransport(
+            auto_merge=True,
+            fail_reviewers=True,
+            config_text=config,
+        )
+        output = StringIO()
+        with redirect_stdout(output):
+            result = run(
+                push_event(),
+                GitHubClient(transport, FAKE_CREDENTIAL, "owner/repo", sleep=lambda _: None),
+                ".github/repoaccord.yml",
+                False,
+            )
+        self.assertEqual(result.decision, "act")
+        self.assertEqual(result.pull_request.number if result.pull_request else None, 21)
+        self.assertTrue(
+            any(note.startswith("could not request reviewers:") for note in result.notes)
+        )
+        self.assertIn("note: could not request reviewers:", output.getvalue())
+        with tempfile.TemporaryDirectory() as directory:
+            summary_path = Path(directory, "summary.md")
+            _write_summary(result, str(summary_path))
+            self.assertIn("could not request reviewers:", summary_path.read_text(encoding="utf-8"))
+        posts = [request for request in transport.requests if request[0] == "POST"]
+        self.assertEqual(
+            [urlsplit(request[1]).path.rsplit("/", 1)[-1] for request in posts],
+            ["pulls", "requested_reviewers", "assignees", "labels", "graphql"],
+        )
+
+    def test_dry_run_lists_metadata_action_without_posting(self) -> None:
+        transport = RoutingTransport(
+            config_text="pull_request:\n  reviewers: [reviewer]\n  labels: [triage]"
+        )
+        with redirect_stdout(StringIO()):
+            result = run(
+                push_event(),
+                GitHubClient(transport, FAKE_CREDENTIAL, "owner/repo"),
+                ".github/repoaccord.yml",
+                True,
+            )
+        self.assertEqual(result.decision, "act")
+        self.assertEqual(result.actions, ("CreatePullRequest", "AddPullRequestMetadata"))
+        self.assertFalse(any(request[0] == "POST" for request in transport.requests))
+
+    def test_default_config_makes_no_metadata_calls(self) -> None:
+        transport = RoutingTransport()
+        with redirect_stdout(StringIO()):
+            result = run(
+                push_event(),
+                GitHubClient(transport, FAKE_CREDENTIAL, "owner/repo"),
+                ".github/repoaccord.yml",
+                False,
+            )
+        self.assertEqual(result.decision, "act")
+        self.assertEqual(result.actions, ("CreatePullRequest",))
+        self.assertEqual(
+            [urlsplit(request[1]).path for request in transport.requests if request[0] == "POST"],
+            ["/repos/owner/repo/pulls"],
+        )
 
     def test_existing_open_issue_is_reused_without_issue_post(self) -> None:
         marker = "<!-- repoaccord:branch=feat/report -->"
