@@ -1,4 +1,4 @@
-# Draft configuration example; the schema is not implemented yet.
+# Draft configuration example; schema is still pre-release.
 version: 1
 branches:
   prefixes:
@@ -10,6 +10,7 @@ actors:
   allow: []
 issues:
   label: null
+  template: null
 pull_request:
   placeholder: "#<issue number>"
 trailers:

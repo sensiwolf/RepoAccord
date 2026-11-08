@@ -1,0 +1,19 @@
+{
+  "event": {
+    "actor": "contributor",
+    "actor_is_bot": false,
+    "ref": "refs/heads/feat/report",
+    "deleted": false,
+    "commit_message": "Add report\n\n=== PR ===\n## Summary\nAdds report.\n\n## Testing\nNot run."
+  },
+  "facts": {
+    "default_branch": "main",
+    "actor_permission": "write",
+    "existing_pr": false,
+    "paths": [".github/PULL_REQUEST_TEMPLATE.md"],
+    "pr_template_text": "## Summary\n## Testing",
+    "issue_templates": {},
+    "required_checks_proven": null
+  },
+  "config_text": null
+}
