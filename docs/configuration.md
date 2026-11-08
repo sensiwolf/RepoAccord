@@ -8,7 +8,7 @@ Safe defaults are shown below.
 ```yaml
 version: 1
 branches:
-  prefixes: [feat/, fix/, docs/, chore/]
+  prefixes: [feat/, fix/, docs/, chore/] # Prefix starts with an ASCII letter or digit.
 actors:
   allow: [] # Empty means only actors with write permission are allowed.
 issues:

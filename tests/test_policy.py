@@ -1,6 +1,7 @@
 import ast
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from repoaccord.policy import (
     CreateIssue,
@@ -9,6 +10,7 @@ from repoaccord.policy import (
     PushEvent,
     RepoFacts,
     decide,
+    parse_template,
     render_pr_body,
 )
 
@@ -179,6 +181,16 @@ class TestPolicy(unittest.TestCase):
         )
         self.assertEqual(configured.actions[0].labels, ("triage",))
 
+    def test_issue_template_is_parsed_once(self) -> None:
+        repository = facts(
+            paths=(PR_PATH, ISSUE_PATH),
+            issue_templates={ISSUE_PATH: ISSUE_TEMPLATE},
+        )
+        with patch("repoaccord.policy.parse_template", wraps=parse_template) as parser:
+            plan = decide(event(message=issue_message()), repository, None)
+        self.assertEqual(plan.decision, "act")
+        self.assertEqual(parser.call_count, 2)
+
     def test_issue_missing_template_adds_note_and_no_labels(self) -> None:
         message = issue_message()
         plan = decide(event(message=message), facts(paths=(PR_PATH,)), None)
@@ -306,7 +318,7 @@ class TestPolicy(unittest.TestCase):
                 render_pr_body(body, placeholder, number)
 
     def test_pure_modules_import_only_allowed_modules(self) -> None:
-        allowed = {
+        pure_allowed = {
             "collections.abc",
             "dataclasses",
             "re",
@@ -319,16 +331,25 @@ class TestPolicy(unittest.TestCase):
             "repoaccord.message",
             "repoaccord.templates",
         }
-        for name in ("config.py", "message.py", "templates.py", "policy.py"):
-            tree = ast.parse((ROOT / "src" / "repoaccord" / name).read_text(encoding="utf-8"))
+        source = ROOT / "src" / "repoaccord"
+        all_imports: dict[str, set[str]] = {}
+        for path in source.glob("*.py"):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
             imported: set[str] = set()
             for node in ast.walk(tree):
                 if isinstance(node, ast.Import):
                     imported.update(alias.name for alias in node.names)
                 elif isinstance(node, ast.ImportFrom) and node.module:
                     imported.add(node.module)
+            all_imports[path.name] = imported
+
+        for name in ("config.py", "message.py", "templates.py", "policy.py"):
+            imported = all_imports[name]
             with self.subTest(module=name):
-                self.assertLessEqual(imported, allowed)
+                self.assertLessEqual(imported, pure_allowed)
+                self.assertFalse(
+                    imported & {"repoaccord.github_api", "repoaccord.run", "repoaccord.cli"}
+                )
                 self.assertFalse(
                     any(
                         module == forbidden or module.startswith(forbidden + ".")
@@ -345,6 +366,83 @@ class TestPolicy(unittest.TestCase):
                         )
                     )
                 )
+
+        urllib_users = {
+            name
+            for name, imported in all_imports.items()
+            if any(module == "urllib" or module.startswith("urllib.") for module in imported)
+        }
+        self.assertEqual(urllib_users, {"github_api.py"})
+        for name, imported in all_imports.items():
+            if name not in {"cli.py", "run.py"}:
+                self.assertFalse(imported & {"os", "pathlib"}, name)
+
+        io_methods = {"open", "read_text", "read_bytes", "write_text", "write_bytes"}
+        for name in (
+            "config.py",
+            "message.py",
+            "templates.py",
+            "policy.py",
+            "github_api.py",
+            "__main__.py",
+        ):
+            tree = ast.parse((source / name).read_text(encoding="utf-8"))
+            calls: set[str] = set()
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                if isinstance(node.func, ast.Name) and node.func.id == "open":
+                    calls.add("open")
+                elif isinstance(node.func, ast.Attribute) and node.func.attr in io_methods:
+                    value = node.func.value
+                    if not (
+                        node.func.attr == "open"
+                        and isinstance(value, ast.Name)
+                        and value.id == "opener"
+                    ):
+                        calls.add(node.func.attr)
+            self.assertFalse(calls & io_methods, name)
+
+        file_readers = {"open", "read_text", "read_bytes", "write_text", "write_bytes"}
+        for path in source.glob("*.py"):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            calls: set[str] = set()
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                if isinstance(node.func, ast.Name) and node.func.id == "open":
+                    calls.add("open")
+                elif isinstance(node.func, ast.Attribute) and node.func.attr in file_readers:
+                    value = node.func.value
+                    if not (
+                        node.func.attr == "open"
+                        and isinstance(value, ast.Name)
+                        and value.id == "opener"
+                    ):
+                        calls.add(node.func.attr)
+            if path.name not in {"cli.py", "run.py"}:
+                self.assertFalse(calls & file_readers, path.name)
+            environment_reads = [
+                node
+                for node in ast.walk(tree)
+                if isinstance(node, ast.Attribute)
+                and node.attr == "environ"
+                and isinstance(node.value, ast.Name)
+                and node.value.id == "os"
+            ]
+            if path.name != "run.py":
+                self.assertFalse(environment_reads, path.name)
+
+    def test_api_module_has_no_prohibited_write_methods(self) -> None:
+        tree = ast.parse(
+            (ROOT / "src" / "repoaccord" / "github_api.py").read_text(encoding="utf-8")
+        )
+        defined = {
+            node.name
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+        self.assertFalse(defined & {"merge", "approve", "push", "delete", "force"})
 
 
 if __name__ == "__main__":

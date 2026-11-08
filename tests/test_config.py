@@ -92,6 +92,8 @@ auto_merge:
             "[feat]",
             "[feat/ bad/]",
             "[feat/../]",
+            "[/feat/]",
+            "[_feat/]",
             "[]",
             "[" + ", ".join(f"p{i}/" for i in range(21)) + "]",
         ):

@@ -57,6 +57,24 @@ class TestMessage(unittest.TestCase):
         parsed = parse_message("S\r\n=== PR ===\r\nline one\r\nline two", ())
         self.assertEqual(parsed.pr_body, "line one\nline two")
 
+    def test_markers_accept_trailing_whitespace(self) -> None:
+        parsed = parse_message(
+            "  Subject title  \n=== ISSUE === \t\n Issue title \t\n"
+            "Issue body\n=== PR ===   \n## Summary\nBody",
+            (),
+        )
+        self.assertEqual(parsed.title, "Subject title")
+        self.assertEqual(parsed.issue, IssueDraft("Issue title", "Issue body"))
+        self.assertEqual(parsed.pr_body, "## Summary\nBody")
+
+    def test_titles_are_stripped_before_return(self) -> None:
+        parsed = parse_message(
+            "  Subject  \n=== ISSUE ===\n  Issue title \n=== PR ===\nBody",
+            (),
+        )
+        self.assertEqual(parsed.title, "Subject")
+        self.assertEqual(parsed.issue, IssueDraft("Issue title", ""))
+
     def test_forbidden_trailers_at_line_start(self) -> None:
         for phrase in ("Co-authored-by", "co-authored-by", "GENERATED WITH"):
             text = f"Subject\n=== PR ===\n  {phrase}: name"
