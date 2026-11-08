@@ -11,8 +11,17 @@ actors:
 issues:
   label: null
   template: null
+  assignees: []
+  # Example: assignees: [release-manager]
 pull_request:
   placeholder: "#<issue number>"
+  reviewers: []
+  assignees: []
+  labels: []
+  # Example:
+  # reviewers: [maintainer]
+  # assignees: [release-manager]
+  # labels: [needs-review]
 trailers:
   forbid: []
   # Example: explicitly reject these phrases.
