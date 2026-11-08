@@ -1,0 +1,21 @@
+# Draft configuration example; the schema is not implemented yet.
+version: 1
+branches:
+  prefixes:
+    - feat/
+    - fix/
+    - docs/
+    - chore/
+actors:
+  allow: []
+issues:
+  label: null
+pull_request:
+  placeholder: "#<issue number>"
+trailers:
+  forbid:
+    - Co-authored-by
+    - Generated with
+auto_merge:
+  enabled: false
+  method: merge
