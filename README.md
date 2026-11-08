@@ -2,35 +2,45 @@
 
 Repository automation, aligned with your rules.
 
-## What it is
+## What it does
 
-RepoAccord is an autonomous repository contributor.
-It handles repetitive Git and GitHub housekeeping.
-It follows each repository's own rules.
+RepoAccord is an autonomous repository contributor that handles repetitive Git and GitHub
+housekeeping.
+It reads the repository's rules and templates before planning an action.
+It can create a requested issue and open a correctly formatted pull request.
 
-**Status: pre-alpha, not usable yet**
+**Status: early release (v0.1), tested end to end in a sandbox repository**
 
-## Planned for the first release
+## Quick start
 
-- React to a push on an allowed branch.
-- Read the repository's issue and pull request templates.
-- Create an issue when asked.
-- Open a pull request in the repository's format with `Closes #N`.
-- Enable auto-merge only when required checks are proven.
+1. Create a fine-grained token limited to **one repository**, with Issues read/write, Pull requests
+   read/write, Contents read, and Metadata read. Save it as the repository secret
+   `REPOACCORD_TOKEN`; never commit it.
+2. Copy [examples/caller-workflow.yml](examples/caller-workflow.yml) to
+   `.github/workflows/repoaccord.yml`.
+3. Push a branch whose last commit message follows [docs/input-protocol.md](docs/input-protocol.md).
+   It starts in dry-run. Set the repository **variable** `REPOACCORD_DRY_RUN` to `false` to go live.
 
-## Principles
+## Optional: auto-merge
 
-- Follows your repository's rules.
-- Fails safe.
-- Never bypasses checks or branch protection.
-- Adds no unwanted commit trailers.
-- Makes no hardcoded repository assumptions.
+Set `auto_merge.enabled` in `.github/repoaccord.yml`, turn on **Allow auto-merge** in repository
+settings, and require at least one status check on the default branch with a branch ruleset or
+branch protection. Add Contents read/write to the token; GitHub requires it for the auto-merge
+call.
+
+## Known limitations
+
+- Markdown templates only; YAML issue forms are not supported.
+- One pull request per branch; a repeat push is skipped.
+- If auto-merge fails after the pull request is created, enable it on the pull request by hand; it
+  is not retried.
+- GitHub's setting to delete head branches may not delete a branch merged by auto-merge.
+- Only pushes by users with write access to branches matching configured prefixes are handled.
+- Issue reuse searches the 100 most recent open issues.
 
 ## Documentation
 
 - [Architecture](docs/architecture.md)
-- [Security model](docs/security-model.md)
 - [Configuration](docs/configuration.md)
 - [Input protocol](docs/input-protocol.md)
-- [Contributing](CONTRIBUTING.md)
-- [Security reporting](SECURITY.md)
+- [Security model](docs/security-model.md)

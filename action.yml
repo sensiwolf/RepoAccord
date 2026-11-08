@@ -1,5 +1,8 @@
 name: RepoAccord
 description: Repository automation, aligned with your rules.
+branding:
+  icon: git-pull-request
+  color: blue
 inputs:
   token:
     description: Token used to create issues and pull requests; must not be the default GITHUB_TOKEN if you want CI to run on the PR
@@ -13,7 +16,6 @@ inputs:
 runs:
   using: composite
   steps:
-    # This action is not released yet.
     - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
       with:
         python-version: "3.11"
