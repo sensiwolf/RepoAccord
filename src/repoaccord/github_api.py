@@ -274,11 +274,7 @@ class GitHubClient:
         )
         response = self._request(method, url, body=body)
         if not 200 <= response.status < 300:
-            raise GitHubError(
-                response.status,
-                f"GitHub API returned HTTP {response.status}",
-                self._token,
-            )
+            raise self._response_error(response)
         try:
             return json.loads(response.body.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -287,6 +283,35 @@ class GitHubClient:
                 "GitHub API returned invalid JSON",
                 self._token,
             ) from exc
+
+    def _response_error(self, response: Response) -> GitHubError:
+        details = [f"GitHub API returned HTTP {response.status}"]
+        try:
+            data = json.loads(response.body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            data = None
+        if isinstance(data, dict):
+            message = data.get("message")
+            if isinstance(message, str) and message.strip():
+                details.append(message)
+            errors = data.get("errors")
+            if isinstance(errors, list):
+                for error in errors[:3]:
+                    if not isinstance(error, dict):
+                        continue
+                    detail = error.get("message")
+                    if not isinstance(detail, str) or not detail.strip():
+                        detail = error.get("code")
+                    field = error.get("field")
+                    if isinstance(field, list):
+                        field = ", ".join(item for item in field if isinstance(item, str))
+                    if not isinstance(detail, str) or not detail.strip():
+                        continue
+                    details.append(
+                        f"{field}: {detail}" if isinstance(field, str) and field else detail
+                    )
+        compact = " ".join("; ".join(details).split())[:300]
+        return GitHubError(response.status, compact, self._token)
 
     def _default(self) -> str:
         if self._default_branch is None:
@@ -357,11 +382,7 @@ class GitHubClient:
         if response.status == 404:
             return None
         if not 200 <= response.status < 300:
-            raise GitHubError(
-                response.status,
-                f"GitHub API returned HTTP {response.status}",
-                self._token,
-            )
+            raise self._response_error(response)
         try:
             return response.body.decode("utf-8")
         except UnicodeDecodeError as exc:
@@ -380,6 +401,31 @@ class GitHubClient:
         if not isinstance(data, list):
             raise GitHubError(200, "pull request response is not a list", self._token)
         return bool(data)
+
+    def find_open_issue_by_marker(self, marker: str) -> IssueRef | None:
+        """Find the first open issue containing the exact marker on its own line."""
+        data = self._json(
+            "GET",
+            self._url("issues", query={"state": "open", "per_page": "100"}),
+        )
+        if not isinstance(data, list):
+            raise GitHubError(200, "issues response is not a list", self._token)
+        for item in data:
+            if not isinstance(item, dict) or "pull_request" in item:
+                continue
+            body = item.get("body")
+            number = item.get("number")
+            url = item.get("html_url")
+            if (
+                isinstance(body, str)
+                and marker in body.splitlines()
+                and type(number) is int
+                and isinstance(url, str)
+            ):
+                if _redact(url, self._token) != url:
+                    raise GitHubError(200, "issue URL contains a forbidden credential", self._token)
+                return IssueRef(number=number, url=url)
+        return None
 
     @staticmethod
     def _has_required_checks(data: Any) -> bool:
@@ -480,5 +526,15 @@ class GitHubClient:
             f"{self.api_url}/graphql",
             {"query": query, "variables": {"id": node_id, "method": merge_method}},
         )
-        if isinstance(data, dict) and data.get("errors"):
-            raise GitHubError(200, "GitHub GraphQL request returned errors", self._token)
+        if isinstance(data, dict):
+            errors = data.get("errors")
+            if isinstance(errors, list) and errors:
+                first = errors[0]
+                message = first.get("message") if isinstance(first, dict) else None
+                detail = (
+                    "GitHub GraphQL request returned errors: " + message
+                    if isinstance(message, str) and message.strip()
+                    else "GitHub GraphQL request returned errors"
+                )
+                compact = " ".join(detail.split())[:300]
+                raise GitHubError(200, compact, self._token)
