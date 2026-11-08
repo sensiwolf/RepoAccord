@@ -8,6 +8,16 @@ from repoaccord.errors import MessageError
 ISSUE_MARKER = "=== ISSUE ==="
 PR_MARKER = "=== PR ==="
 MAX_BODY_LENGTH = 65_000
+_SUPPORTED_TRAILERS = {
+    "co-authored-by",
+    "signed-off-by",
+    "reviewed-by",
+    "acked-by",
+    "tested-by",
+    "reported-by",
+    "suggested-by",
+    "helped-by",
+}
 
 
 @dataclass(frozen=True)
@@ -20,15 +30,32 @@ class IssueDraft:
 
 @dataclass(frozen=True)
 class ParsedMessage:
-    """The pull request title, optional issue, and pull request body."""
+    """The pull request title, optional issue, body, and final trailer paragraph."""
 
     title: str
     issue: IssueDraft | None
     pr_body: str
+    trailers: tuple[str, ...] = ()
 
 
 def _block(lines: list[str], start: int, end: int) -> str:
-    return "\n".join(lines[start + 1 : end]).strip("\n")
+    return "\n".join(lines[start + 1 : end])
+
+
+def _is_supported_trailer(line: str) -> bool:
+    key, separator, value = line.partition(": ")
+    return bool(separator and value.strip() and key.casefold() in _SUPPORTED_TRAILERS)
+
+
+def _strip_trailer_paragraph(content: str) -> tuple[str, tuple[str, ...]]:
+    lines = content.rstrip("\n").split("\n")
+    for separator in range(len(lines) - 2, -1, -1):
+        if lines[separator].strip():
+            continue
+        trailer_lines = lines[separator + 1 :]
+        if trailer_lines and all(_is_supported_trailer(line) for line in trailer_lines):
+            return "\n".join(lines[:separator]).rstrip("\n"), tuple(trailer_lines)
+    return content.strip("\n"), ()
 
 
 def parse_message(text: str, forbidden_trailers: Sequence[str]) -> ParsedMessage:
@@ -61,6 +88,7 @@ def parse_message(text: str, forbidden_trailers: Sequence[str]) -> ParsedMessage
 
     issue: IssueDraft | None = None
     pr_body: str | None = None
+    trailers: tuple[str, ...] = ()
     for position, (marker_index, marker) in enumerate(marker_positions):
         end = (
             marker_positions[position + 1][0]
@@ -68,6 +96,9 @@ def parse_message(text: str, forbidden_trailers: Sequence[str]) -> ParsedMessage
             else len(lines)
         )
         content = _block(lines, marker_index, end)
+        if position == len(marker_positions) - 1:
+            content, trailers = _strip_trailer_paragraph(content)
+        content = content.strip("\n")
         if marker == PR_MARKER:
             if not content.strip():
                 raise MessageError("pull request body must not be blank")
@@ -92,4 +123,4 @@ def parse_message(text: str, forbidden_trailers: Sequence[str]) -> ParsedMessage
 
     if pr_body is None:
         raise MessageError("required === PR === block is missing")
-    return ParsedMessage(title=title, issue=issue, pr_body=pr_body)
+    return ParsedMessage(title=title, issue=issue, pr_body=pr_body, trailers=trailers)

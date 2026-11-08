@@ -9,6 +9,7 @@ class TestConfig(unittest.TestCase):
         for value in (None, "", " \n\t"):
             with self.subTest(value=value):
                 self.assertEqual(load_config(value), Config())
+                self.assertEqual(load_config(value).trailers.forbid, ())
 
     def test_full_configuration(self) -> None:
         config = load_config(

@@ -73,9 +73,9 @@ class PullRequest:
 
 @dataclass(frozen=True)
 class Trailers:
-    """Forbidden commit message trailers."""
+    """Commit message trailer policy."""
 
-    forbid: tuple[str, ...] = ("Co-authored-by", "Generated with")
+    forbid: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

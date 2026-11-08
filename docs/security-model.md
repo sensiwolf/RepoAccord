@@ -1,8 +1,8 @@
 # Security model
 
 The offline parsing, validation, and planning core, GitHub client, and push-event runner are
-implemented. Client and runner behavior is tested with a fake transport; live GitHub permissions
-and end-to-end operation have not been verified.
+implemented. Client and runner behavior is tested with a fake transport. The issue/PR and
+auto-merge flow has also been exercised end to end in a sandbox repository.
 
 ## Credentials and workflow trust
 
@@ -29,13 +29,16 @@ authorizes only the event sender, never the pusher or commit author. Ignore bots
 ending in `[bot]`), tags, deletes, and pushes to the default branch.
 
 Forbidden trailer detection is case-insensitive and rejects a line that starts, after optional
-whitespace, with a configured phrase; a phrase in the middle of a line is allowed.
+whitespace, with a configured phrase; a phrase in the middle of a line is allowed. The default
+forbids no phrases. A supported final trailer paragraph is separated from the last block's body
+after the configured whole-message forbidden check.
 
 ## Pull requests and auto-merge
 
 Auto-merge is off by default. Enable it only after proving that required status checks exist for
 the base branch using the branch rules API, and use the configured merge method. Never use an
-admin override, force push, or bypass. If required checks cannot be proven, refuse and explain why.
+admin override, force push, or bypass. If required checks cannot be proven, skip the auto-merge
+action and explain why.
 
 Use an idempotency marker in issue and pull request bodies and allow one pull request per branch.
 If a pull request already exists for that branch, do nothing. Before creating a requested issue,
@@ -49,8 +52,8 @@ values. The configuration, message, template, and policy modules do not access t
 environment, filesystem, or subprocesses.
 
 Missing permission or information means stop with a clear message. Pin actions by full commit SHA,
-request minimal permissions, and never log credentials or the environment. The client and runner
-apply these controls, but endpoint permission details still require sandbox verification.
+request minimal permissions, and never log credentials or the environment. The permissions below
+were verified in the sandbox.
 
 Workflow-command output escapes percent signs as `%25`, carriage returns as `%0D`, line feeds as
 `%0A`, and neutralizes `::` at the start of a line. Refusal annotations use only the escaped
@@ -66,13 +69,17 @@ For non-success API responses, GitHub's message and up to three error details ar
 available. Error details are whitespace-collapsed, truncated to 300 characters, and token-redacted;
 response and request headers are never included.
 
-| API operation | Intended fine-grained token permission |
+| Operation | Verified fine-grained token permission |
 | --- | --- |
-| Read repository metadata, paths, files, and default branch | Contents read; Metadata read |
-| Read collaborator permissions and branch rules/protection | Contents read; Metadata read |
-| List and create pull requests; enable pull request auto-merge | Pull requests read/write |
-| Create issues | Issues read/write |
+| Issue and pull request creation | Issues read/write, Pull requests read/write, Contents read, Metadata read (the whole flow ran with Contents read) |
+| Auto-merge | Additionally Contents read/write (the GraphQL call was rejected with Contents read and succeeded with Contents read/write; GitHub does not document this permission for the call) |
 
-Exact permission requirements for branch rules, legacy protection, collaborator-permission, and
-GraphQL calls have **not** been verified against real GitHub. They will be confirmed in a sandbox
-test before release.
+With the sandbox token above, the rules endpoint returned the required status check and the
+collaborator-permission endpoint returned the actor's write permission. The legacy
+branch-protection endpoint was not exercised with this token. When required checks cannot be
+proven, RepoAccord skips auto-merge and says so. In the required-check sandbox test, auto-merge
+waited for the required check with an empty bypass list; the pull request was not merged while the
+check was pending or in progress.
+
+A token that can write contents is a larger grant. Keep it scoped to one repository and protect
+the default branch.

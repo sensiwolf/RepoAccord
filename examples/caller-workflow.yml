@@ -1,4 +1,4 @@
-# Example only; RepoAccord has not been released yet.
+# Example caller workflow.
 name: RepoAccord
 on:
   push:
@@ -16,6 +16,8 @@ jobs:
   repoaccord:
     runs-on: ubuntu-latest
     steps:
-      - uses: sensiwolf/repoaccord@<release tag or full commit SHA>
+      # For real repositories, pin a release tag or full commit SHA.
+      - uses: sensiwolf/repoaccord@v0.1.0
         with:
           token: ${{ secrets.REPOACCORD_TOKEN }}
+          dry-run: ${{ vars.REPOACCORD_DRY_RUN || 'true' }}

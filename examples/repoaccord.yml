@@ -1,4 +1,4 @@
-# Draft configuration example; schema is still pre-release.
+# RepoAccord configuration example.
 version: 1
 branches:
   prefixes:
@@ -14,9 +14,11 @@ issues:
 pull_request:
   placeholder: "#<issue number>"
 trailers:
-  forbid:
-    - Co-authored-by
-    - Generated with
+  forbid: []
+  # Example: explicitly reject these phrases.
+  # forbid:
+  #   - "Co-authored-by"
+  #   - "Generated with"
 auto_merge:
   enabled: false
   method: merge
