@@ -1,5 +1,6 @@
 import unittest
 
+from repoaccord.config import load_config
 from repoaccord.errors import MessageError
 from repoaccord.message import IssueDraft, parse_message
 
@@ -16,6 +17,7 @@ class TestMessage(unittest.TestCase):
         self.assertEqual(parsed.title, "Subject")
         self.assertIsNone(parsed.issue)
         self.assertEqual(parsed.pr_body, "Body")
+        self.assertEqual(parsed.trailers, ())
         parsed_issue = parse_message(
             "Subject\n=== ISSUE ===\nIssue title\nIssue body\n=== PR ===\nPR body",
             (),
@@ -87,6 +89,118 @@ class TestMessage(unittest.TestCase):
             ("Co-authored-by",),
         )
         self.assertIn("Co-authored-by", parsed.pr_body)
+
+    def test_trailers_are_allowed_by_default_but_can_be_forbidden(self) -> None:
+        default = load_config(None)
+        parsed = parse_message(
+            "Subject\n=== PR ===\nBody\n\nCo-authored-by: Test Person <test@example.invalid>",
+            default.trailers.forbid,
+        )
+        self.assertEqual(parsed.trailers, ("Co-authored-by: Test Person <test@example.invalid>",))
+        generated = parse_message(
+            "Subject\n=== PR ===\nGenerated with: a tool",
+            default.trailers.forbid,
+        )
+        self.assertEqual(generated.pr_body, "Generated with: a tool")
+        for phrase in ("Co-authored-by", "Generated with"):
+            config = load_config(f'trailers:\n  forbid: ["{phrase}"]')
+            with self.subTest(phrase=phrase), self.assertRaisesRegex(MessageError, "forbidden"):
+                parse_message(
+                    f"Subject\n=== PR ===\nBody\n\n{phrase}: a value",
+                    config.trailers.forbid,
+                )
+
+    def test_supported_final_trailer_paragraph_is_removed_from_pr_body(self) -> None:
+        parsed = parse_message(
+            "Subject\n=== PR ===\nPR body\n\nCo-authored-by: Test Person <test@example.invalid>",
+            (),
+        )
+        self.assertEqual(parsed.pr_body, "PR body")
+        self.assertEqual(
+            parsed.trailers,
+            ("Co-authored-by: Test Person <test@example.invalid>",),
+        )
+
+    def test_multiple_supported_final_trailers_are_removed(self) -> None:
+        parsed = parse_message(
+            "Subject\n=== PR ===\nPR body\n\n"
+            "Co-authored-by: Test Person <test@example.invalid>\n"
+            "Signed-off-by: Another Person <another@example.invalid>",
+            (),
+        )
+        self.assertEqual(parsed.pr_body, "PR body")
+        self.assertEqual(
+            parsed.trailers,
+            (
+                "Co-authored-by: Test Person <test@example.invalid>",
+                "Signed-off-by: Another Person <another@example.invalid>",
+            ),
+        )
+
+    def test_unrecognized_or_mixed_final_paragraph_stays_in_body(self) -> None:
+        for paragraph in (
+            "Note: keep this",
+            "Note: keep this\nCo-authored-by: Test Person <test@example.invalid>",
+        ):
+            with self.subTest(paragraph=paragraph):
+                parsed = parse_message(f"Subject\n=== PR ===\nPR body\n\n{paragraph}", ())
+                self.assertEqual(parsed.pr_body, f"PR body\n\n{paragraph}")
+                self.assertEqual(parsed.trailers, ())
+
+    def test_trailer_is_removed_from_last_issue_block(self) -> None:
+        parsed = parse_message(
+            "Subject\n=== PR ===\nPR body\n=== ISSUE ===\nIssue title\nIssue body\n\n"
+            "Co-authored-by: Test Person <test@example.invalid>",
+            (),
+        )
+        self.assertEqual(parsed.pr_body, "PR body")
+        self.assertEqual(parsed.issue, IssueDraft("Issue title", "Issue body"))
+        self.assertEqual(
+            parsed.trailers,
+            ("Co-authored-by: Test Person <test@example.invalid>",),
+        )
+
+    def test_trailer_only_pr_body_is_refused_as_blank(self) -> None:
+        with self.assertRaisesRegex(MessageError, "pull request body must not be blank"):
+            parse_message(
+                "Subject\n=== PR ===\n\nCo-authored-by: Test Person <test@example.invalid>",
+                (),
+            )
+
+    def test_signed_off_by_is_case_insensitive(self) -> None:
+        parsed = parse_message(
+            "Subject\n=== PR ===\nPR body\n\nsIgNeD-oFf-bY: Test Person <test@example.invalid>",
+            (),
+        )
+        self.assertEqual(parsed.pr_body, "PR body")
+        self.assertEqual(
+            parsed.trailers,
+            ("sIgNeD-oFf-bY: Test Person <test@example.invalid>",),
+        )
+
+    def test_trailer_looking_line_in_middle_of_body_is_preserved(self) -> None:
+        body = "First paragraph\nCo-authored-by: Test Person <test@example.invalid>\nLast paragraph"
+        parsed = parse_message(f"Subject\n=== PR ===\n{body}", ())
+        self.assertEqual(parsed.pr_body, body)
+        self.assertEqual(parsed.trailers, ())
+
+    def test_crlf_trailer_paragraph_is_removed(self) -> None:
+        parsed = parse_message(
+            "Subject\r\n=== PR ===\r\nPR body\r\n\r\n"
+            "Co-authored-by: Test Person <test@example.invalid>\r\n",
+            (),
+        )
+        self.assertEqual(parsed.pr_body, "PR body")
+        self.assertEqual(
+            parsed.trailers,
+            ("Co-authored-by: Test Person <test@example.invalid>",),
+        )
+
+    def test_body_length_is_checked_after_trailer_removal(self) -> None:
+        trailer = "Co-authored-by: " + "x" * 65_001
+        parsed = parse_message(f"S\n=== PR ===\n{'x' * 65_000}\n\n{trailer}", ())
+        self.assertEqual(len(parsed.pr_body), 65_000)
+        self.assertEqual(parsed.trailers, (trailer,))
 
     def test_subject_and_issue_title_lengths(self) -> None:
         self.assertEqual(len(parse_message("s" * 256 + "\n=== PR ===\nx", ()).title), 256)

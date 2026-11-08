@@ -1,7 +1,6 @@
 # Configuration
 
-**Draft until the first release.** This version 1 schema is validated strictly; unknown keys at
-any level are errors.
+This version 1 schema is validated strictly; unknown keys at any level are errors.
 
 Safe defaults are shown below.
 
@@ -17,10 +16,17 @@ issues:
 pull_request:
   placeholder: "#<issue number>" # Replaced with the newly created issue number.
 trailers:
-  forbid: [Co-authored-by, Generated with]
+  forbid: [] # Default: do not forbid any trailer phrase.
 auto_merge:
   enabled: false
   method: merge # One of merge, squash, or rebase.
+```
+
+To reject selected trailer phrases, configure them explicitly:
+
+```yaml
+trailers:
+  forbid: ["Co-authored-by", "Generated with"]
 ```
 
 Issue template labels are used when `issues.label` is null. A configured issue label overrides
