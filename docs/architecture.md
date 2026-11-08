@@ -6,7 +6,7 @@ RepoAccord automates repetitive Git and GitHub housekeeping while following each
 rules. It is planned as a GitHub composite action calling a small Python package. It will not be
 published to PyPI.
 
-## Planned flow
+## Implemented flow
 
 Push event -> authorize -> read configuration and templates from the default branch -> parse the
 tip commit message -> let policy decide a plan -> execute idempotently -> optionally enable
@@ -22,14 +22,15 @@ Implemented offline modules:
 - `policy.py`: decide an action plan without network access.
 - `errors.py`: typed, user-facing validation errors.
 - `cli.py`: load JSON plan input and serialize the offline plan.
+- `github_api.py`: call GitHub through an injectable transport.
+- `run.py`: map push events to facts, plans, output, and approved API operations.
 
 Planned, not implemented:
 
-- `github_api.py`: contain GitHub API calls.
-- `run.py`: coordinate GitHub access and execution.
+- additional execution and recovery behavior beyond the current supported operations.
 
-Policy is pure logic; network access belongs only in `github_api.py`. The implemented core is
-testable offline and does not execute its plans.
+Policy is pure logic; network access belongs only in `github_api.py`. The client and runner are
+covered using a fake transport and do not require live GitHub access in tests.
 
 ## Phase 1 non-goals
 

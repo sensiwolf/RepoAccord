@@ -1,12 +1,12 @@
-import os
 import sys
 
-MESSAGE = "RepoAccord is pre-alpha: no behaviour is implemented yet."
-
 if __name__ == "__main__":
-    if len(sys.argv) > 1:
+    if len(sys.argv) > 1 and sys.argv[1] == "plan":
         from repoaccord.cli import main
 
         raise SystemExit(main())
-    print(MESSAGE)
-    raise SystemExit(0 if os.environ.get("REPOACCORD_DRY_RUN") == "true" else 1)
+
+    from repoaccord.github_api import UrllibTransport
+    from repoaccord.run import run_from_environment
+
+    raise SystemExit(run_from_environment(None, UrllibTransport()))
