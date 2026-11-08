@@ -8,7 +8,13 @@ from typing import Literal, TypeAlias
 from repoaccord.config import ConfigError, load_config
 from repoaccord.errors import MessageError, TemplateError
 from repoaccord.message import ParsedMessage, parse_message
-from repoaccord.templates import check_body, find_issue_template, find_pr_template, parse_template
+from repoaccord.templates import (
+    Template,
+    check_body,
+    find_issue_template,
+    find_pr_template,
+    parse_template,
+)
 
 _BRANCH = re.compile(r"^[A-Za-z0-9._/-]{1,200}$")
 _PERMISSIONS = {"admin", "maintain", "write"}
@@ -100,11 +106,7 @@ def _template_text(facts: RepoFacts, selected: str) -> str | None:
     return matches[0] if len(matches) == 1 else None
 
 
-def _validate_body(body: str, template_text: str, label: str) -> str | None:
-    try:
-        template = parse_template(template_text)
-    except TemplateError as exc:
-        return f"{label} template is invalid: {exc}"
+def _validate_body(body: str, template: Template, label: str) -> str | None:
     result = check_body(body, template)
     details: list[str] = []
     if result.missing:
@@ -169,7 +171,11 @@ def decide(event: PushEvent, facts: RepoFacts, config_text: str | None) -> Plan:
     if pr_template_path is not None:
         if facts.pr_template_text is None:
             return _refuse("pull request template contents could not be read")
-        problem = _validate_body(message.pr_body, facts.pr_template_text, "pull request")
+        try:
+            pr_template = parse_template(facts.pr_template_text)
+        except TemplateError as exc:
+            return _refuse(f"pull request template is invalid: {exc}")
+        problem = _validate_body(message.pr_body, pr_template, "pull request")
         if problem:
             return _refuse(problem)
     else:
@@ -191,10 +197,13 @@ def decide(event: PushEvent, facts: RepoFacts, config_text: str | None) -> Plan:
             issue_template_text = _template_text(facts, issue_template_path)
             if issue_template_text is None:
                 return _refuse("issue template contents could not be read")
-            problem = _validate_body(message.issue.body, issue_template_text, "issue")
+            try:
+                issue_template = parse_template(issue_template_text)
+            except TemplateError as exc:
+                return _refuse(f"issue template is invalid: {exc}")
+            problem = _validate_body(message.issue.body, issue_template, "issue")
             if problem:
                 return _refuse(problem)
-            issue_template = parse_template(issue_template_text)
             issue_labels = (
                 (config.issues.label,) if config.issues.label is not None else issue_template.labels
             )

@@ -35,8 +35,8 @@ def parse_message(text: str, forbidden_trailers: Sequence[str]) -> ParsedMessage
     """Parse a commit message without interpreting its contents."""
     normalized = text.replace("\r\n", "\n")
     lines = normalized.split("\n")
-    title = lines[0]
-    if not title.strip() or len(title) > 256:
+    title = lines[0].strip()
+    if not title or len(title) > 256:
         raise MessageError("commit subject must be 1..256 characters")
 
     for line in lines:
@@ -48,9 +48,10 @@ def parse_message(text: str, forbidden_trailers: Sequence[str]) -> ParsedMessage
     marker_positions: list[tuple[int, str]] = []
     counts = {ISSUE_MARKER: 0, PR_MARKER: 0}
     for index, line in enumerate(lines[1:], start=1):
-        if line in counts:
-            counts[line] += 1
-            marker_positions.append((index, line))
+        marker = line.rstrip()
+        if marker in counts:
+            counts[marker] += 1
+            marker_positions.append((index, marker))
     if any(count > 1 for count in counts.values()):
         raise MessageError("each message block marker may appear only once")
     if counts[PR_MARKER] != 1:
@@ -81,8 +82,8 @@ def parse_message(text: str, forbidden_trailers: Sequence[str]) -> ParsedMessage
             )
             if title_index is None:
                 raise MessageError("issue title must not be blank")
-            issue_title = issue_lines[title_index]
-            if len(issue_title) > 256:
+            issue_title = issue_lines[title_index].strip()
+            if not issue_title or len(issue_title) > 256:
                 raise MessageError("issue title must be 1..256 characters")
             issue_body = "\n".join(issue_lines[title_index + 1 :]).strip("\n")
             if len(issue_body) > MAX_BODY_LENGTH:

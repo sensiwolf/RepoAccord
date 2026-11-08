@@ -171,12 +171,14 @@ def load_config(text: str | None) -> Config:
     prefixes = _strings(prefixes, "branches.prefixes", 1, 20)
     if any(
         not prefix.endswith("/")
+        or prefix[0] not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
         or any(character.isspace() for character in prefix)
         or ".." in prefix
         for prefix in prefixes
     ):
         raise ConfigError(
-            "branches.prefixes entries must end with / and contain no whitespace or .."
+            "branches.prefixes entries must start with a letter or digit, end with /, "
+            "and contain no whitespace or .."
         )
 
     actor_data = _mapping(root.get("actors", {}), "actors", {"allow"})
