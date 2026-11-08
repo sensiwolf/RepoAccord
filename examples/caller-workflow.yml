@@ -1,0 +1,21 @@
+# Example only; RepoAccord has not been released yet.
+name: RepoAccord
+on:
+  push:
+    branches:
+      - "feat/**"
+      - "fix/**"
+      - "docs/**"
+      - "chore/**"
+permissions:
+  contents: read
+concurrency:
+  group: repoaccord-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  repoaccord:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: sensiwolf/repoaccord@<release tag or full commit SHA>
+        with:
+          token: ${{ secrets.REPOACCORD_TOKEN }}

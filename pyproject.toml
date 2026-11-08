@@ -1,0 +1,25 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "repoaccord"
+version = "0.0.0"
+description = "Repository automation, aligned with your rules."
+requires-python = ">=3.11"
+dependencies = ["PyYAML>=6,<7"]
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.12"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/repoaccord"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "S"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
