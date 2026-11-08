@@ -38,7 +38,9 @@ the base branch using the branch rules API, and use the configured merge method.
 admin override, force push, or bypass. If required checks cannot be proven, refuse and explain why.
 
 Use an idempotency marker in issue and pull request bodies and allow one pull request per branch.
-If a pull request already exists for that branch, do nothing.
+If a pull request already exists for that branch, do nothing. Before creating a requested issue,
+the runner looks for an open issue whose body contains the exact branch marker on its own line and
+reuses the first match after a partial failure.
 
 ## Fail-safe operation
 
@@ -60,6 +62,9 @@ operations is creating issues, creating pull requests, and enabling pull request
 no operation for merging, approvals, pushes, branch deletion, force pushes, or settings changes.
 The token is sent only in the authorization header. It is redacted from client representations and
 API errors and is never included in a URL, exception, log, or printed output.
+For non-success API responses, GitHub's message and up to three error details are included when
+available. Error details are whitespace-collapsed, truncated to 300 characters, and token-redacted;
+response and request headers are never included.
 
 | API operation | Intended fine-grained token permission |
 | --- | --- |
