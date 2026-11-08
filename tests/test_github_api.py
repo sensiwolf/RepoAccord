@@ -335,8 +335,10 @@ class TestGitHubClient(unittest.TestCase):
 
     def test_graphql_errors_raise_short_error(self) -> None:
         transport = FakeTransport(json_response(200, {"errors": [{"message": "details"}]}))
-        with self.assertRaisesRegex(GitHubError, "GraphQL request returned errors"):
+        with self.assertRaises(GitHubError) as caught:
             client(transport).enable_auto_merge("node-1", "merge")
+        self.assertIn("GraphQL request returned errors", str(caught.exception))
+        self.assertIn("details", str(caught.exception))
 
     def test_bad_json_and_non_success_raise(self) -> None:
         for response, text in (
@@ -345,6 +347,95 @@ class TestGitHubClient(unittest.TestCase):
         ):
             with self.subTest(response=response), self.assertRaisesRegex(GitHubError, text):
                 client(FakeTransport(response)).get_default_branch()
+
+    def test_api_error_includes_message_and_field_details(self) -> None:
+        response = json_response(
+            422,
+            {
+                "message": "Validation Failed",
+                "errors": [
+                    {"resource": "Issue", "field": "title", "code": "already_exists"},
+                    {"field": "labels", "message": "invalid"},
+                    {"message": "other"},
+                    {"message": "must not be included"},
+                ],
+            },
+        )
+        with self.assertRaises(GitHubError) as caught:
+            client(FakeTransport(response)).create_issue("title", "body", ())
+        self.assertIn("Validation Failed", str(caught.exception))
+        self.assertIn("title: already_exists", str(caught.exception))
+        self.assertIn("labels: invalid", str(caught.exception))
+        self.assertNotIn("must not be included", str(caught.exception))
+
+    def test_api_error_redacts_token_and_truncates_details(self) -> None:
+        response = json_response(
+            422,
+            {
+                "message": f"Rejected {FAKE_CREDENTIAL}",
+                "errors": [{"message": "x" * 500}],
+            },
+        )
+        with self.assertRaises(GitHubError) as caught:
+            client(FakeTransport(response)).create_issue("title", "body", ())
+        self.assertNotIn(FAKE_CREDENTIAL, str(caught.exception))
+        self.assertLessEqual(len(str(caught.exception)), 300)
+
+    def test_non_json_error_body_is_ignored(self) -> None:
+        with self.assertRaises(GitHubError) as caught:
+            client(FakeTransport(Response(422, {}, b"private server detail"))).get_default_branch()
+        self.assertEqual(str(caught.exception), "GitHub API returned HTTP 422")
+
+    def test_graphql_error_includes_and_redacts_first_message(self) -> None:
+        response = json_response(
+            200,
+            {"errors": [{"message": f"Cannot update {FAKE_CREDENTIAL}"}, {"message": "ignored"}]},
+        )
+        with self.assertRaises(GitHubError) as caught:
+            client(FakeTransport(response)).enable_auto_merge("node-1", "merge")
+        self.assertIn("Cannot update", str(caught.exception))
+        self.assertNotIn(FAKE_CREDENTIAL, str(caught.exception))
+
+    def test_find_open_issue_by_marker_requires_exact_own_line_match(self) -> None:
+        marker = "<!-- repoaccord:branch=feat/report -->"
+        transport = FakeTransport(
+            json_response(
+                200,
+                [
+                    {
+                        "number": 1,
+                        "html_url": "https://github.test/issues/1",
+                        "body": "before\n" + marker + "\nafter",
+                        "pull_request": {"url": "https://api.github.test/pulls/1"},
+                    },
+                    {
+                        "number": 2,
+                        "html_url": "https://github.test/issues/2",
+                        "body": "before\n " + marker + "\nafter",
+                    },
+                    {
+                        "number": 3,
+                        "html_url": "https://github.test/issues/3",
+                        "body": "before\n" + marker + "\nafter",
+                    },
+                ],
+            ),
+        )
+        api = client(transport)
+        self.assertEqual(
+            api.find_open_issue_by_marker(marker),
+            IssueRef(3, "https://github.test/issues/3"),
+        )
+        self.assertIn("/issues?state=open&per_page=100", transport.requests[0][1])
+
+    def test_find_open_issue_by_marker_returns_none_when_no_exact_match(self) -> None:
+        transport = FakeTransport(
+            json_response(
+                200,
+                [{"number": 2, "html_url": "https://github.test/issues/2", "body": "other"}],
+            ),
+        )
+        self.assertIsNone(client(transport).find_open_issue_by_marker("exact marker"))
 
     def test_urllib_transport_rejects_non_https_without_network(self) -> None:
         with self.assertRaisesRegex(GitHubError, "HTTPS"):
@@ -463,15 +554,17 @@ class TestGitHubClient(unittest.TestCase):
         with self.assertRaisesRegex(GitHubError, "not UTF-8"):
             client(transport).read_file("README.md")
 
-    def test_non_success_file_read_has_only_short_message(self) -> None:
+    def test_non_success_file_read_includes_api_message(self) -> None:
         transport = FakeTransport(
             json_response(200, {"default_branch": "main"}),
             json_response(403, {"message": "sensitive server detail"}),
         )
         with self.assertRaises(GitHubError) as caught:
             client(transport).read_file("README.md")
-        self.assertEqual(str(caught.exception), "GitHub API returned HTTP 403")
-        self.assertNotIn("sensitive server detail", str(caught.exception))
+        self.assertEqual(
+            str(caught.exception),
+            "GitHub API returned HTTP 403; sensitive server detail",
+        )
 
     def test_rules_short_circuit_only_for_nonempty_required_checks(self) -> None:
         cases = (

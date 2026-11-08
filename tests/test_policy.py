@@ -11,6 +11,7 @@ from repoaccord.policy import (
     RepoFacts,
     decide,
     parse_template,
+    precheck,
     render_pr_body,
 )
 
@@ -55,6 +56,37 @@ def issue_message(pr_body: str = PR_BODY + "\n#<issue number>") -> str:
 
 
 class TestPolicy(unittest.TestCase):
+    def test_precheck_only_skips_the_four_early_conditions(self) -> None:
+        cases = (
+            (event(ref="refs/tags/v1"), "not a branch"),
+            (event(deleted=True), "deleted"),
+            (event(ref="refs/heads/main"), "default branch"),
+            (event(bot=True), "bot"),
+            (event(actor="automation[bot]"), "bot"),
+        )
+        for pushed, reason in cases:
+            with self.subTest(reason=reason):
+                result = precheck(pushed, "main")
+                self.assertIsNotNone(result)
+                self.assertEqual(result.decision, "skip")
+                self.assertIn(reason, result.reason)
+        self.assertIsNone(precheck(event(), "main"))
+
+    def test_custom_branch_prefix_is_loaded_before_policy_decides(self) -> None:
+        custom = "branches:\n  prefixes: [claude/]"
+        accepted = decide(
+            event(ref="refs/heads/claude/task"),
+            facts(),
+            custom,
+        )
+        ignored = decide(
+            event(ref="refs/heads/feat/x"),
+            facts(),
+            custom,
+        )
+        self.assertEqual(accepted.decision, "act")
+        self.assertEqual(ignored.decision, "skip")
+
     def test_initial_skip_conditions(self) -> None:
         cases = (
             (event(ref="refs/tags/v1", deleted=True, bot=True), facts(), "not a branch"),

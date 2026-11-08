@@ -9,6 +9,9 @@ from pathlib import Path
 from unittest.mock import patch
 from urllib.parse import urlsplit
 
+import yaml
+
+from repoaccord.errors import TemplateError
 from repoaccord.github_api import GitHubClient, Response, UrllibTransport
 from repoaccord.run import (
     RunResult,
@@ -36,6 +39,7 @@ class RoutingTransport:
         fail_graphql: bool = False,
         default_branch: str = "main",
         config_text: str | None = None,
+        open_issues: list[dict[str, object]] | None = None,
     ) -> None:
         self.issue = issue
         self.auto_merge = auto_merge
@@ -43,6 +47,7 @@ class RoutingTransport:
         self.fail_graphql = fail_graphql
         self.default_branch = default_branch
         self.config_text = config_text
+        self.open_issues = open_issues or []
         self.requests: list[tuple[str, str, dict[str, str], bytes | None, int]] = []
 
     def request(
@@ -96,6 +101,8 @@ class RoutingTransport:
             return _json(200, {"permission": "write"})
         if path.endswith("/pulls"):
             return _json(200, [])
+        if path.endswith("/issues"):
+            return _json(200, self.open_issues)
         if path.endswith("/rules/branches/main"):
             if self.auto_merge:
                 return _json(
@@ -181,6 +188,50 @@ def environment(directory: tempfile.TemporaryDirectory[str], **values: str) -> d
 
 
 class TestRun(unittest.TestCase):
+    def test_action_yaml_has_no_runner_github_env_or_run_expressions(self) -> None:
+        action = yaml.safe_load(
+            (Path(__file__).parents[1] / "action.yml").read_text(encoding="utf-8")
+        )
+        for step in action["runs"]["steps"]:
+            with self.subTest(step=step.get("name", step.get("uses"))):
+                self.assertFalse(any(key.startswith("GITHUB_") for key in step.get("env", {})))
+                self.assertNotIn("${{", step.get("run", ""))
+
+    def test_custom_branch_prefix_is_used_by_run(self) -> None:
+        transport = RoutingTransport(config_text="branches:\n  prefixes: [claude/]")
+        with redirect_stdout(StringIO()):
+            result = run(
+                push_event(ref="refs/heads/claude/task"),
+                GitHubClient(transport, FAKE_CREDENTIAL, "owner/repo"),
+                ".github/repoaccord.yml",
+                True,
+            )
+        self.assertEqual(result.decision, "act")
+
+    def test_repository_comparison_is_case_insensitive(self) -> None:
+        transport = RoutingTransport()
+        with redirect_stdout(StringIO()):
+            result = run(
+                push_event(repository="OWNER/REPO"),
+                GitHubClient(transport, FAKE_CREDENTIAL, "owner/repo"),
+                ".github/repoaccord.yml",
+                True,
+            )
+        self.assertEqual(result.decision, "act")
+
+    def test_template_error_is_reported_directly(self) -> None:
+        transport = RoutingTransport()
+        with patch("repoaccord.run.find_pr_template", side_effect=TemplateError("bad template")):
+            with redirect_stdout(StringIO()):
+                result = run(
+                    push_event(),
+                    GitHubClient(transport, FAKE_CREDENTIAL, "owner/repo"),
+                    ".github/repoaccord.yml",
+                    True,
+                )
+        self.assertEqual(result.decision, "error")
+        self.assertEqual(result.reason, "bad template")
+
     def test_module_without_arguments_calls_runner_with_real_transport(self) -> None:
         with patch("repoaccord.run.run_from_environment", return_value=0) as runner:
             with patch.object(sys, "argv", ["repoaccord"]):
@@ -364,6 +415,71 @@ class TestRun(unittest.TestCase):
         self.assertEqual(result.issue.number if result.issue else None, 17)
         self.assertEqual(result.pull_request.number if result.pull_request else None, 21)
 
+    def test_existing_open_issue_is_reused_without_issue_post(self) -> None:
+        marker = "<!-- repoaccord:branch=feat/report -->"
+        transport = RoutingTransport(
+            open_issues=[
+                {
+                    "number": 45,
+                    "html_url": "https://github.test/issues/45",
+                    "body": f"Existing issue\n{marker}\n",
+                }
+            ]
+        )
+        message = (
+            "Add report\n\n=== ISSUE ===\nBug title\n## Details\nIssue text\n=== PR ===\n"
+            "## Summary\nDetails.\n## Testing\nDone\n#<issue number>"
+        )
+        with redirect_stdout(StringIO()):
+            result = run(
+                push_event(commit_message=message),
+                GitHubClient(transport, FAKE_CREDENTIAL, "owner/repo"),
+                ".github/repoaccord.yml",
+                False,
+            )
+        posts = [request for request in transport.requests if request[0] == "POST"]
+        self.assertEqual(
+            [urlsplit(request[1]).path.rsplit("/", 1)[-1] for request in posts], ["pulls"]
+        )
+        pull_payload = json.loads(posts[0][3] or b"")
+        self.assertIn("#45", pull_payload["body"])
+        self.assertIsNotNone(result.issue)
+        self.assertEqual(result.issue.number if result.issue else None, 45)
+        self.assertIn("reused open issue #45", result.notes)
+
+    def test_issue_reuse_ignores_pull_requests_and_other_markers(self) -> None:
+        transport = RoutingTransport(
+            open_issues=[
+                {
+                    "number": 44,
+                    "html_url": "https://github.test/issues/44",
+                    "body": "<!-- repoaccord:branch=feat/report -->",
+                    "pull_request": {"url": "https://api.github.test/pulls/44"},
+                },
+                {
+                    "number": 45,
+                    "html_url": "https://github.test/issues/45",
+                    "body": "<!-- repoaccord:branch=feat/other -->",
+                },
+            ]
+        )
+        message = (
+            "Add report\n\n=== ISSUE ===\nBug title\n## Details\nIssue text\n=== PR ===\n"
+            "## Summary\nDetails.\n## Testing\nDone\n#<issue number>"
+        )
+        with redirect_stdout(StringIO()):
+            result = run(
+                push_event(commit_message=message),
+                GitHubClient(transport, FAKE_CREDENTIAL, "owner/repo"),
+                ".github/repoaccord.yml",
+                False,
+            )
+        posts = [request for request in transport.requests if request[0] == "POST"]
+        self.assertEqual(
+            [urlsplit(request[1]).path.rsplit("/", 1)[-1] for request in posts], ["issues", "pulls"]
+        )
+        self.assertEqual(result.issue.number if result.issue else None, 17)
+
     def test_missing_issue_placeholder_refuses_without_posts(self) -> None:
         message = f"Add report\n\n=== ISSUE ===\nBug title\n## Details\nBody\n=== PR ===\n{PR_BODY}"
         transport = RoutingTransport(issue=False)
@@ -487,6 +603,28 @@ class TestRun(unittest.TestCase):
             )
         finally:
             directory.cleanup()
+
+    def test_empty_api_url_uses_default(self) -> None:
+        for api_url in ("", " \t "):
+            with self.subTest(api_url=api_url):
+                directory = event_file(push_event())
+                try:
+                    transport = RoutingTransport()
+                    with redirect_stdout(StringIO()):
+                        result = run_from_environment(
+                            environment(directory, GITHUB_API_URL=api_url),
+                            transport,
+                            sleep=lambda _: None,
+                        )
+                    self.assertEqual(result, 0)
+                    self.assertTrue(
+                        all(
+                            request[1].startswith("https://api.github.com/")
+                            for request in transport.requests
+                        )
+                    )
+                finally:
+                    directory.cleanup()
 
     def test_action_output_escape_sequences(self) -> None:
         self.assertEqual(

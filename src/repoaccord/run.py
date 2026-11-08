@@ -24,10 +24,10 @@ from repoaccord.policy import (
     CreateIssue,
     CreatePullRequest,
     EnableAutoMerge,
-    Plan,
     PushEvent,
     RepoFacts,
     decide,
+    precheck,
     render_pr_body,
 )
 from repoaccord.templates import find_pr_template
@@ -143,20 +143,6 @@ def _event_values(event: Mapping[str, Any]) -> tuple[PushEvent, str, str]:
     )
 
 
-def _early_skip(push: PushEvent, default_branch: str) -> Plan | None:
-    empty_facts = RepoFacts(
-        default_branch=default_branch,
-        actor_permission=None,
-        existing_pr=False,
-        paths=(),
-        pr_template_text=None,
-        issue_templates={},
-        required_checks_proven=None,
-    )
-    plan = decide(push, empty_facts, None)
-    return plan if plan.decision == "skip" else None
-
-
 def _marker(branch: str) -> str:
     return f"<!-- repoaccord:branch={branch} -->"
 
@@ -186,12 +172,17 @@ def _action_names(actions: tuple[Action, ...]) -> tuple[str, ...]:
     return tuple(type(action).__name__ for action in actions)
 
 
-def _failure(reason: str, issue: IssueRef | None, pr: PullRequestRef | None) -> RunResult:
+def _failure(
+    reason: str,
+    issue: IssueRef | None,
+    pr: PullRequestRef | None,
+    notes: tuple[str, ...] = (),
+) -> RunResult:
     if issue is not None:
         reason = f"{reason}; recover issue #{issue.number} at {issue.url}"
     if pr is not None:
         reason = f"{reason}; pull request #{pr.number} is at {pr.url}"
-    return _result("error", reason, issue=issue, pull_request=pr)
+    return _result("error", reason, notes, issue=issue, pull_request=pr)
 
 
 def run(
@@ -207,9 +198,9 @@ def run(
         push, event_repository, event_default_branch = _event_values(event)
     except ValueError as exc:
         return _result("refuse", str(exc))
-    if event_repository != client.repository:
+    if event_repository.casefold() != client.repository.casefold():
         return _result("refuse", "event repository does not match configured repository")
-    early = _early_skip(push, event_default_branch)
+    early = precheck(push, event_default_branch)
     if early is not None:
         return _result(early.decision, early.reason, early.notes)
 
@@ -247,7 +238,11 @@ def run(
         plan = decide(push, facts, config_text)
         notes.extend(plan.notes)
     except (GitHubError, TemplateError, OSError) as exc:
-        reason = str(exc) if isinstance(exc, GitHubError) else "repository facts could not be read"
+        reason = (
+            str(exc)
+            if isinstance(exc, (GitHubError, TemplateError))
+            else "repository facts could not be read"
+        )
         return _failure(reason, issue_ref, pull_request_ref)
 
     if plan.decision != "act" or dry_run:
@@ -263,11 +258,15 @@ def run(
     try:
         for action in plan.actions:
             if isinstance(action, CreateIssue):
-                issue_ref = client.create_issue(
-                    action.title,
-                    _append_marker(action.body, marker),
-                    action.labels,
-                )
+                issue_ref = client.find_open_issue_by_marker(marker)
+                if issue_ref is not None:
+                    notes.append(f"reused open issue #{issue_ref.number}")
+                else:
+                    issue_ref = client.create_issue(
+                        action.title,
+                        _append_marker(action.body, marker),
+                        action.labels,
+                    )
             elif isinstance(action, CreatePullRequest):
                 number = issue_ref.number if issue_ref is not None else None
                 body = render_pr_body(action.body_template, action.placeholder, number)
@@ -279,13 +278,19 @@ def run(
                 )
             elif isinstance(action, EnableAutoMerge):
                 if pull_request_ref is None:
-                    return _failure("auto-merge plan has no created pull request", issue_ref, None)
+                    return _failure(
+                        "auto-merge plan has no created pull request",
+                        issue_ref,
+                        None,
+                        tuple(notes),
+                    )
                 client.enable_auto_merge(pull_request_ref.node_id, action.method)
     except (GitHubError, ValueError) as exc:
         return _failure(
             str(exc) if isinstance(exc, GitHubError) else "pull request body could not be rendered",
             issue_ref,
             pull_request_ref,
+            tuple(notes),
         )
 
     return _result(
@@ -326,7 +331,7 @@ def run_from_environment(
         result = _result("refuse", "GitHub event file is invalid")
         _write_summary(result, environ.get("GITHUB_STEP_SUMMARY"))
         return 1
-    api_url = environ.get("GITHUB_API_URL", "https://api.github.com")
+    api_url = environ.get("GITHUB_API_URL", "").strip() or "https://api.github.com"
     try:
         client = GitHubClient(
             transport or UrllibTransport(),

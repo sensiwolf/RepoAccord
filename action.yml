@@ -28,4 +28,3 @@ runs:
         REPOACCORD_TOKEN: ${{ inputs.token }}
         REPOACCORD_CONFIG_PATH: ${{ inputs.config-path }}
         REPOACCORD_DRY_RUN: ${{ inputs.dry-run }}
-        GITHUB_API_URL: ${{ env.GITHUB_API_URL }}

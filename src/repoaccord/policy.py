@@ -93,6 +93,20 @@ def _refuse(reason: str) -> Plan:
     return Plan("refuse", reason, (), ())
 
 
+def precheck(event: PushEvent, default_branch: str) -> Plan | None:
+    """Skip non-branch, deleted, default-branch, and bot pushes before loading config."""
+    if not event.ref.startswith("refs/heads/"):
+        return _skip("event is not a branch push")
+    if event.deleted:
+        return _skip("deleted branches are ignored")
+    branch = event.ref[len("refs/heads/") :]
+    if branch == default_branch:
+        return _skip("push to the default branch is ignored")
+    if event.actor_is_bot or event.actor.casefold().endswith("[bot]"):
+        return _skip("bot actors are ignored")
+    return None
+
+
 def _template_text(facts: RepoFacts, selected: str) -> str | None:
     selected_name = selected.replace("\\", "/").rsplit("/", 1)[-1].casefold()
     exact = facts.issue_templates.get(selected)
@@ -120,15 +134,10 @@ def _validate_body(body: str, template: Template, label: str) -> str | None:
 
 def decide(event: PushEvent, facts: RepoFacts, config_text: str | None) -> Plan:
     """Return a deterministic plan without performing I/O or side effects."""
-    if not event.ref.startswith("refs/heads/"):
-        return _skip("event is not a branch push")
-    if event.deleted:
-        return _skip("deleted branches are ignored")
+    initial_skip = precheck(event, facts.default_branch)
+    if initial_skip is not None:
+        return initial_skip
     branch = event.ref[len("refs/heads/") :]
-    if branch == facts.default_branch:
-        return _skip("push to the default branch is ignored")
-    if event.actor_is_bot or event.actor.casefold().endswith("[bot]"):
-        return _skip("bot actors are ignored")
 
     if (
         not _BRANCH.fullmatch(branch)
